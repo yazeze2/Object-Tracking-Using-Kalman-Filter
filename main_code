@@ -1,0 +1,105 @@
+%Bouncing Ball Tracking
+% 04/27/18
+
+clear all;
+clc;
+
+Vid = 'Bounce_B.mp4'; 
+V_ID = VideoReader(Vid); 
+N_F = V_ID.NumberOfFrames; 
+Wd = V_ID.Width;
+Ht = V_ID.Height; 
+T = 10;
+
+%Change in t between frames
+dt=0.5;
+%State Transition Matrix
+A = [1 0 dt 0;0 1 0 dt;0 0 1 0 ;0 0 0 1]; 
+B = [(dt^2)/2 (dt^2)/2 dt dt]';
+% Acceleration
+u = 4e-3;
+%Observation Matrix
+H = [1 0 0 0;
+     0 1 0 0];
+%Covariance Matrices
+State_Cov = 10;
+S = State_Cov * eye(size(A,1));
+Meas_Cov = 1;
+R = Meas_Cov * eye(size(Ht,1));
+DynNoise_Cov = (0.01)^2;
+Q = [(dt^2)/4 0 (dt^3)/2 0; 0 (dt^2)/4 0 (dt^3)/2; (dt^3/2) 0 (dt^2) 0;0 (dt^3)/2 0 (dt^2)];
+
+%Kalman Vars
+Input = [];
+x = [];
+Kalman_O = [];
+x = [Ht/2; Wd/2; 0; 0;]; 
+
+%Background Extraction
+BK_F = BK_Avg(Vid);
+
+%Extract Bouncing Ball
+B_Ball = zeros(Ht,Wd,N_F);
+B_BallL = zeros(Ht,Wd,N_F);
+BB_Labeled = zeros(Ht,Wd,N_F);
+J=0;
+for i=1:N_F-1
+    C_F = double(read(V_ID,i));
+    B_BallL(:,:,i)=(abs(C_F(:,:,1) - BK_F(:,:,1)) > T)...
+                   |(abs(C_F(:,:,2) - BK_F(:,:,2)) > T)...
+                   |(abs(C_F(:,:,3) - BK_F(:,:,3)) > T);
+               
+    B_Ball(:,:,i) = bwmorph(B_BallL(:,:,i),'erode',2);
+    BB_Labeled(:,:,i) = bwlabel(B_Ball(:,:,i),4); 
+    Props{i} = regionprops(BB_Labeled(:,:,i),'basic');
+    [n_obj,features] = size(Props{i});
+    area = 0;
+    if(n_obj ~= 0) 
+         for k=1:n_obj
+             if(Props{i}(k).Area > area)
+                id(i) = k;
+                area = Props{i}(k).Area;
+             end
+         end
+    centroid(:,:,i) = Props{i}(id(i)).Centroid;
+    else
+        centroid(:,:,i) = [rand*200 rand*200];
+        J = J+1;
+    end 
+end
+
+%Marking_Bounce
+for r=1:N_F-1
+    FR = read(V_ID,r);
+    FR = insertShape(FR,'circle',[centroid(1,1,r) centroid(1,2,r) (sqrt(Props{r}(id(r)).Area)/pi)],'LineWidth',1);
+    Marked_Bounce(:,:,:,r) = FR;
+end
+
+for r=1:N_F-1
+    FR = read(V_ID,r);
+    FR = insertShape(FR,'circle',[centroid(1,1,r) centroid(1,2,r) 16],'LineWidth',2, 'Color','green');
+    
+    %Kalman Update     
+    if(mod(r,2) == 0)
+        input = [centroid(1,1,r); centroid(1,2,r)];
+    else
+        input=[];
+    end   
+   
+    % Predict the next state
+    x = A*x + B*u;
+    % Update the error covariance 
+    S = A*S*A' + Q;
+    % Update Kalman Gain
+    K = S*H'*inv(H*S*H'+R);
+    % Correct Prediction
+    if(~isempty(input)) 
+        x = x + K*(input - H*x);
+    end    
+    S = (eye(size(S,1)) - K*H)*S;   
+    Kalman_O = H*x;
+    FR = insertShape(FR,'circle',[Kalman_O(1) Kalman_O(2) 16],'LineWidth',2,'Color','red');
+    scenario_1(:,:,:,r) = FR;
+    
+end
+implay(scenario_1,15);
